@@ -34,9 +34,12 @@ Encoder myEncoderD(2, 3, 20, 0.025);
 #define SENSOR_COUNT (sizeof(sensores)/sizeof(*sensores))
 
 int   sensores[]           = { S1, S2, S3, S4, S5}; // Vetor para sensores
-float sensor_para_angulo[] = {-25, -13, 0, 13, 25} /*inicializado no setup*/;
+//int   sensores[]           = {S2, S3, S4};
+float sensor_para_angulo[] = {-25, -13, 0, 13, 25};
+//float sensor_para_angulo[] = {-13, 0, 13}; /*inicializado no setup*/;
 bool  sensor_dig[SENSOR_COUNT] /*inicializado no loop*/;
 bool  running = false;
+int vel_base = 240;
 
 bool last_signal = HIGH;
 int  curve_number = 0;
@@ -92,7 +95,7 @@ bool parar() { // fazer: dividir em duas funções: passou_por_marcador() e para
 void loop() {
     if (parar()) {
         BT.println("Parado");
-        mover(240,220);
+        //mover(240,220);
         delay(400);
         stop();
     } else {
@@ -214,9 +217,13 @@ String terminal(const char *const cmd) {
             pid_ang.kd = x; 
         }
         resposta = "KD: " + String(pid_ang.kd) + "\n";
+    } else if (key == "vel") {
+    if (hasValue) {
+        vel_base = x; }
+        resposta = "Vel: " + String(vel_base) + "  (Max: 255 pwm)" + "\n";
     } else if (key == "start") {
         start(); 
-        //curve_number = 0;
+        curve_number = 0;
         resposta = "System started\n";
     } else if (key == "stop") {
         stop(); 
@@ -258,15 +265,21 @@ void mover_motores() {
     float angle = read_angle();
     float erro  = 0 - angle;
     float dif   = pid_ang.loop(erro);
-    int vel_base = 240;
+    //vel_base = 240;
 
     int velocidade_esq = vel_base - dif;
     int velocidade_dir = vel_base + dif;
+
 
     // Constranger as velocidades para não ultrapassar os limites
     velocidade_esq = constrain(velocidade_esq, -255, 255);
     velocidade_dir = constrain(velocidade_dir, -255, 255);
     mover(velocidade_esq, velocidade_dir);
+
+    delay(10);
+
+    //BT.println(velocidade_esq);
+
 }
 
 void mover(int16_t vel_esq, int16_t vel_dir) {
