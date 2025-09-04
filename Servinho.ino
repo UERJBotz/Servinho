@@ -1,23 +1,21 @@
-#define THEO
-
 // Inclusão das bibliotecas
-#include <MPU6050_tockn.h> // Giroscópio e Acelerômetro
-#include <Wire.h> // Necessária para o Giroscópio e Acelerômetro
+//#include <MPU6050_tockn.h> // Giroscópio e Acelerômetro
+//#include <Wire.h> // Necessária para o Giroscópio e Acelerômetro
 #include <SoftwareSerial.h> // Para o módulo Bluetooth
 
 #include "encoder.h"
 
 // Declaração de objetos
-MPU6050 mpu6050(Wire);
-SoftwareSerial BT(52, 53);
-Encoder myEncoderE(18, 19, 20, 0.025);
-Encoder myEncoderD(2, 3, 20, 0.025);
+//MPU6050 mpu6050(Wire);
+SoftwareSerial BT(6, 9);
 
 // Definição dos pinos dos motores
-#define motorDir1 5
-#define motorDir2 4
-#define motorEsq1 6
-#define motorEsq2 7
+#define motorEsq1 12
+#define motorEsq2 13
+#define motorEsqPWM 10
+#define motorDir1 8
+#define motorDir2 7
+#define motorDirPWM 11
 
 // Definição dos pinos dos sensores
 #define S1 A0
@@ -34,9 +32,7 @@ Encoder myEncoderD(2, 3, 20, 0.025);
 #define SENSOR_COUNT (sizeof(sensores)/sizeof(*sensores))
 
 int   sensores[]           = { S1, S2, S3, S4, S5}; // Vetor para sensores
-//int   sensores[]           = {S2, S3, S4};
 float sensor_para_angulo[] = {-25, -13, 0, 13, 25};
-//float sensor_para_angulo[] = {-13, 0, 13}; /*inicializado no setup*/;
 bool  sensor_dig[SENSOR_COUNT] /*inicializado no loop*/;
 bool  running = false;
 int vel_base = 240;
@@ -46,15 +42,20 @@ int  curve_number = 0;
 const int stop_count = 22;
 const unsigned long debounce_delay = 50;
 unsigned long last_debounce_time   = 0;
+bool show_vel = 0;
+unsigned long tempo_antes = 0;
+float soma_vel = 0;
+float contM = 0;
+float vel_media = 0;
+float velM = 0;
 
 // Programas principais
 void setup() {
     Serial.begin(9600);
     BT.begin(9600);
-    myEncoderE.begin<myEncoderE>();
-    myEncoderD.begin<myEncoderD>();
     BT.println("Espere alguns segundos...");
-    Wire.begin();
+    //Wire.begin();
+    setup_encoder();
 
     for (int i = 0; i < 5; i++) {
         pinMode(sensores[i], INPUT);
@@ -65,6 +66,8 @@ void setup() {
     pinMode(motorEsq2, OUTPUT);
     pinMode(motorDir1, OUTPUT);
     pinMode(motorDir2, OUTPUT);
+    pinMode(motorDirPWM, OUTPUT);
+    pinMode(motorEsqPWM, OUTPUT);
 
     BT.println("### MENU ###");
     BT.println("'kp, ki ou kd' para mostrar valores atuais do PID");
@@ -102,6 +105,21 @@ void loop() {
         //BT.println(curve_number);
     }
 
+    unsigned long dt = (millis() - tempo_antes);
+    if ((dt >= 100) && (show_vel)) {
+        float left, right;
+        get_wheel_speeds(dt, &left, &right);
+        velM = ((left + right)/2 );
+        soma_vel += velM;
+        contM ++;
+        BT.print("Vel: ");
+        BT.print(velM);
+        BT.println(" m/s");
+        Serial.println((velM));
+
+        tempo_antes = millis();
+    }
+
     if (running) mover_motores();
 
     if (BT.available() > 0){
@@ -112,12 +130,7 @@ void loop() {
         Serial.println(resposta);
         BT.println(resposta);
     }
-    /*
-    float speedE = myEncoderD.getAngularSpeed();
-    BT.print(speedE);
-    BT.println(" Km/h");
-    Serial.println(running);
-    */
+
 }
 
 
@@ -138,9 +151,9 @@ float read_angle() {
 // Controlador PID
 class control_pid {
   public:
-    float kp = 0;
-    float ki = 0;
-    float kd = 0;
+    double kp = 0;
+    double ki = 0;
+    double kd = 0;
     uint32_t last_ms = 0;
     float last_erro = 0;
     float P = 0;
@@ -165,6 +178,7 @@ class control_pid {
 };
 
 control_pid pid_ang;
+control_pid pid_motor;
 
 
 // Função para parar os motores
@@ -175,6 +189,10 @@ void stop() {
 
 void start(){
     pid_ang.init();
+    pid_motor.kp = 4.65;
+    pid_motor.kd = 0.4;
+    pid_motor.ki = 0.35;
+    pid_motor.init();
     running = true;
 }
 
@@ -186,15 +204,15 @@ String terminal(const char *const cmd) {
     input.replace(',', '.'); 
 
     Serial.println("Raw command: " + input);
-  
+
     int spaceIndex = input.indexOf(' ');
     String key;
-    float x = 0;
+    double x = 0;
     bool hasValue = (spaceIndex != -1); 
     if (hasValue) {
         key = input.substring(0, spaceIndex); 
         String valueStr = input.substring(spaceIndex + 1); 
-        x = valueStr.toFloat(); 
+        x = valueStr.toDouble(); 
     } else {
         key = input;
     }
@@ -206,28 +224,35 @@ String terminal(const char *const cmd) {
         if (hasValue) {
             pid_ang.kp = x; // Se um valor de kp é dado
         }
-        resposta = "KP: " + String(pid_ang.kp) + "\n";
+        resposta = "KP: " + String(pid_ang.kp, 5) + "\n";
     } else if (key == "ki") {
         if (hasValue) {
             pid_ang.ki = x; // Se um valor de ki é dado
         }
-        resposta = "KI: " + String(pid_ang.ki) + "\n";
+        resposta = "KI: " + String(pid_ang.ki, 5) + "\n";
     } else if (key == "kd") {
         if (hasValue) {
             pid_ang.kd = x; 
         }
-        resposta = "KD: " + String(pid_ang.kd) + "\n";
+        resposta = "KD: " + String(pid_ang.kd, 5) + "\n";
     } else if (key == "vel") {
     if (hasValue) {
         vel_base = x; }
         resposta = "Vel: " + String(vel_base) + "  (Max: 255 pwm)" + "\n";
+    }else if (key == "show_vel") {
+        show_vel = !show_vel;
     } else if (key == "start") {
-        start(); 
+        start();
+        show_vel = 1;
         curve_number = 0;
+        soma_vel = 0;
+        contM = 0;
         resposta = "System started\n";
     } else if (key == "stop") {
         stop(); 
-        resposta = "System stopped\n";
+        show_vel = 0;
+        vel_media = soma_vel/contM;
+        resposta = "Velocidade Média: " + String(vel_media) + " System stopped\n";
     } else if (key == "line.read") {
         float angle = read_angle(); 
         resposta = "line: " + String(angle) + " Graus\n";
@@ -241,16 +266,14 @@ String terminal(const char *const cmd) {
     return resposta;
 }
 
-template<typename T>
-String str_array(const char *nome, T* arr, size_t sz){
+template<typename T> String str_array(const char *nome, T* arr, size_t sz){
     String str = String(nome) + " = [ ";
     for (size_t i=0; i<sz-1; i++) str += (String(arr[i]) + " ");
     str += String(arr[sz-1]) + " ]";
     return str;
 }
 
-template<typename T>
-void print_array(String prefix, T* arr, size_t sz){
+template<typename T> void print_array(String prefix, T* arr, size_t sz){
     Serial.print(prefix);
     Serial.print("[");
     for (size_t i=0; i<sz-1; i++){
@@ -262,13 +285,21 @@ void print_array(String prefix, T* arr, size_t sz){
 
 // Função para controlar os motores
 void mover_motores() {
+    float rot = 0;
+    float vel = 0.3;
     float angle = read_angle();
     float erro  = 0 - angle;
+    float erroVel = vel - velM;
     float dif   = pid_ang.loop(erro);
-    //vel_base = 240;
+    float difVel = pid_motor.loop(erroVel);
 
-    int velocidade_esq = vel_base - dif;
-    int velocidade_dir = vel_base + dif;
+    /*
+    float wl = vel/r + (rot*l)/r;
+    float wr = vel/r - (rot*l)/r;
+    */
+
+    int velocidade_esq = (vel_base - erroVel) - dif;
+    int velocidade_dir = (vel_base + erroVel) + dif;
 
 
     // Constranger as velocidades para não ultrapassar os limites
@@ -283,8 +314,8 @@ void mover_motores() {
 }
 
 void mover(int16_t vel_esq, int16_t vel_dir) {
-    motor(motorEsq1, motorEsq2, vel_esq);
-    motor(motorDir1, motorDir2, vel_dir);
+    motor3pin(motorEsq1, motorEsq2, motorEsqPWM, vel_esq);
+    motor3pin(motorDir1, motorDir2, motorDirPWM, vel_dir);
 }
 
 void motor(uint8_t p1, uint8_t p2, int16_t vel) {
@@ -295,4 +326,19 @@ void motor(uint8_t p1, uint8_t p2, int16_t vel) {
         analogWrite(p1, abs(vel));
         analogWrite(p2, 0);
     }
+}
+
+void motor3pin(uint8_t p1, uint8_t p2, uint8_t pwm, int16_t vel) {
+    if (vel < 0) {
+        digitalWrite(p1, LOW);
+        digitalWrite(p2, HIGH);
+
+        analogWrite(pwm, vel);
+    } else {
+        digitalWrite(p1, HIGH);
+        digitalWrite(p2, LOW);
+
+        analogWrite(pwm, abs(vel));
+    }
+
 }
